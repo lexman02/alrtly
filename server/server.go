@@ -1,6 +1,7 @@
 package server
 
 import (
+	"alrtly/config"
 	"embed"
 	"net/http"
 
@@ -10,11 +11,13 @@ import (
 // go:embed audio/*
 var audioFS embed.FS
 
-func NewRouter() *gin.Engine {
+func NewRouter(cfg *config.Config) *gin.Engine {
 	r := gin.Default()
+	h := NewHandler(cfg)
 
 	r.StaticFS("/audio", http.FS(audioFS))
-	r.POST("/alert", PostAlert)
+	r.POST("/alert", h.PostAlert)
+	r.GET("/test/{provider}", h.TestAlert)
 
 	return r
 }

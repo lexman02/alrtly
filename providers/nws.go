@@ -6,9 +6,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"strings"
+	"time"
 )
 
 type NWS struct{}
@@ -16,32 +18,40 @@ type NWS struct{}
 type NWSResponse struct {
 	Features []struct {
 		Properties struct {
-			ID        string `json:"id"`
-			Event     string `json:"event"`
-			Severity  string `json:"severity"`
-			Urgency   string `json:"urgency"`
-			Headline  string `json:"headline"`
-			Response  string `json:"response"`
-			Sent      string `json:"sent"`
-			Effective string `json:"effective"`
-			Expires   string `json:"expires"`
+			ID         string `json:"id"`
+			Event      string `json:"event"`
+			SenderName string `json:"senderName"`
+			Severity   string `json:"severity"`
+			Urgency    string `json:"urgency"`
+			Headline   string `json:"headline"`
+			Response   string `json:"response"`
+			Sent       string `json:"sent"`
+			Effective  string `json:"effective"`
+			Expires    string `json:"expires"`
 		} `json:"properties"`
 	} `json:"features"`
 }
 
 type Alert struct {
-	ID        string `json:"id"`
-	Event     string `json:"event"`
-	Severity  string `json:"severity"`
-	Urgency   string `json:"urgency"`
-	Headline  string `json:"headline"`
-	Response  string `json:"response"`
-	Sent      string `json:"sent"`
-	Effective string `json:"effective"`
-	Expires   string `json:"expires"`
+	ID         string `json:"id"`
+	Event      string `json:"event"`
+	SenderName string `json:"senderName"`
+	Severity   string `json:"severity"`
+	Urgency    string `json:"urgency"`
+	Headline   string `json:"headline"`
+	Response   string `json:"response"`
+	Sent       string `json:"sent"`
+	Effective  string `json:"effective"`
+	Expires    string `json:"expires"`
 }
 
-func (n *NWS) FetchData() (interface{}, error) {
+func init() {
+	RegisterProvider("nws", func() Provider {
+		return &NWS{}
+	})
+}
+
+func (n NWS) FetchData() (interface{}, error) {
 	// Get the coordinates of the user's location from the environment variables
 	lat := os.Getenv("LATITUDE")
 	lon := os.Getenv("LONGITUDE")
@@ -61,7 +71,7 @@ func (n *NWS) FetchData() (interface{}, error) {
 	}
 
 	// Fetch alert data
-	url := fmt.Sprintf("https://api.weather.gov/alerts?status=actual,system&message_type=alert?point=%s,%s", lat, lon)
+	url := fmt.Sprintf("https://api.weather.gov/alerts?status=actual,system&message_type=alert&point=%s,%s", lat, lon)
 	resp, err := http.Get(url)
 	if err != nil {
 		return nil, err
@@ -84,26 +94,25 @@ func (n *NWS) FetchData() (interface{}, error) {
 	var alertData []Alert
 	for _, feature := range alerts.Features {
 		alert := Alert{
-			ID:        feature.Properties.ID,
-			Event:     feature.Properties.Event,
-			Severity:  feature.Properties.Severity,
-			Urgency:   feature.Properties.Urgency,
-			Headline:  feature.Properties.Headline,
-			Response:  feature.Properties.Response,
-			Sent:      feature.Properties.Sent,
-			Effective: feature.Properties.Effective,
-			Expires:   feature.Properties.Expires,
+			ID:         feature.Properties.ID,
+			Event:      feature.Properties.Event,
+			SenderName: feature.Properties.SenderName,
+			Severity:   feature.Properties.Severity,
+			Urgency:    feature.Properties.Urgency,
+			Headline:   feature.Properties.Headline,
+			Response:   feature.Properties.Response,
+			Sent:       feature.Properties.Sent,
+			Effective:  feature.Properties.Effective,
+			Expires:    feature.Properties.Expires,
 		}
 
 		alertData = append(alertData, alert)
 	}
 
-	fmt.Println("Fetching data from NWS...")
-
 	return alertData, nil
 }
 
-func (n *NWS) PrepareData(data interface{}) (*webhook.WebhookData, error) {
+func (n NWS) PrepareData(data interface{}) (*webhook.WebhookData, error) {
 	// Prepare the data for the webhook
 	alerts, ok := data.([]Alert)
 	if !ok {
@@ -120,6 +129,12 @@ func (n *NWS) PrepareData(data interface{}) (*webhook.WebhookData, error) {
 		priority = "low"
 	}
 
+	// Add extra grammar in headline for better readability
+	alerts[0].Headline = "A " + alerts[0].Headline
+	alerts[0].Headline = strings.ReplaceAll(alerts[0].Headline, " issued", " has been issued on")
+	// Expand NWS to National Weather Service in headline
+	alerts[0].Headline = strings.ReplaceAll(alerts[0].Headline, "NWS", "the National Weather Service in")
+
 	// Prepare the data for the webhook
 	return &webhook.WebhookData{
 		ID:       alerts[0].ID,
@@ -128,6 +143,75 @@ func (n *NWS) PrepareData(data interface{}) (*webhook.WebhookData, error) {
 		Priority: priority,
 		Source:   "nws",
 	}, nil
+}
+
+func (n NWS) TestAlert(client *webhook.Client) error {
+	// Implement the method to send a test alert
+	// This could involve calling the PostAlert function with some test data
+	testData := Alert{
+		ID:       "test-id",
+		Event:    "Test Event",
+		Headline: "This is a test alert",
+		Severity: "Minor",
+		Urgency:  "Future",
+		// Fill in the fields of the Alert struct with test data
+	}
+
+	alertData := []Alert{testData}
+	webhookData, err := n.PrepareData(alertData)
+	if err != nil {
+		return err
+	}
+
+	return client.Send(*webhookData)
+}
+
+func (n NWS) Poll(client *webhook.Client, interval time.Duration) {
+	// Create a map to store sent alerts
+	sentAlerts := make(map[string]webhook.WebhookData)
+
+	// Create a new ticker that fires at the specified interval
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	// Poll immediately on start
+	if err := n.pollOnce(client, sentAlerts); err != nil {
+		log.Printf("NWS polling error: %v", err)
+	}
+
+	// Poll on ticker interval
+	for range ticker.C {
+		if err := n.pollOnce(client, sentAlerts); err != nil {
+			log.Printf("NWS polling error: %v", err)
+			continue
+		}
+	}
+}
+
+func (n NWS) pollOnce(client *webhook.Client, sentAlerts map[string]webhook.WebhookData) error {
+	// Fetch data from the NWS provider
+	data, err := n.FetchData()
+	if err != nil {
+		return err
+	}
+
+	if len(data.([]Alert)) > 0 {
+		// Prepare the data
+		preparedData, err := n.PrepareData(data)
+		if err != nil {
+			return err
+		}
+
+		if _, ok := sentAlerts[preparedData.ID]; !ok {
+			// Send the data to the webhook
+			err := client.Send(*preparedData)
+			if err != nil {
+				return err
+			}
+		}
+	}
+
+	return nil
 }
 
 func getCoordinates() (string, string, error) {

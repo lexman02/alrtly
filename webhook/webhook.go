@@ -7,6 +7,14 @@ import (
 	"net/http"
 )
 
+type Client struct {
+	url string
+}
+
+func NewClient(url string) *Client {
+	return &Client{url: url}
+}
+
 type WebhookData struct {
 	ID       string `json:"id"`
 	Title    string `json:"title"`
@@ -15,7 +23,7 @@ type WebhookData struct {
 	Source   string `json:"source"`
 }
 
-func Send(webhookURL string, data WebhookData) error {
+func (c *Client) Send(data WebhookData) error {
 	// Convert data to JSON
 	jsonData, err := json.Marshal(data)
 	if err != nil {
@@ -23,7 +31,7 @@ func Send(webhookURL string, data WebhookData) error {
 	}
 
 	// Make an HTTP POST request to the webhook URL with the JSON payload
-	resp, err := http.Post(webhookURL, "application/json", bytes.NewBuffer(jsonData))
+	resp, err := http.Post(c.url, "application/json", bytes.NewBuffer(jsonData))
 	if err != nil {
 		return err
 	}
