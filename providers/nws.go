@@ -208,6 +208,9 @@ func (n NWS) pollOnce(client *webhook.Client, sentAlerts map[string]webhook.Webh
 			if err != nil {
 				return err
 			}
+
+			// Store the sent alert
+			sentAlerts[preparedData.ID] = *preparedData
 		}
 	}
 
